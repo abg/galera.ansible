@@ -1,0 +1,89 @@
+---
+- copy: src=roles/cloud/files/mariadb-10.0.repo
+        dest=/etc/yum.repos.d/mariadb-10.0.repo
+
+## rpm_key fails on large keys as of ansible 1.6.10
+## See: https://github.com/ansible/ansible/issues/8424
+# - rpm_key: state=present key=https://yum.mariadb.org/RPM-GPG-KEY-MariaDB
+
+# Use rpm --import directly instead
+- command: rpm --import https://yum.mariadb.org/RPM-GPG-KEY-MariaDB
+
+- name: install percona repo
+  yum: name={{ item }} state=installed
+  with_items:
+   - http://www.percona.com/downloads/percona-release/percona-release-0.0-1.x86_64.rpm
+
+- name: install mariadb/galera packages
+  yum: name={{ item}} state=installed
+  with_items:
+   - MariaDB-client
+   - MariaDB-Galera-server
+   - MariaDB-compat
+   - percona-xtrabackup
+   - MySQL-python
+   - vim-enhanced
+
+- set_fact: wsrep_sst_password="{{ lookup('password', 'tmp/wsrep_sst_password length=15') }}"
+- set_fact: mysql_root_password="{{ lookup('password', 'tmp/mysql_root_password length=15') }}"
+
+- template: src=roles/galera/templates/server.my.cnf.j2
+            dest=/etc/my.cnf
+
+
+# port 3306: mysql
+# port 4567: galera group communication
+# port 4444: galera state transfer
+# port 4568: galera incremental state transfer
+- name: Ensure Galera ports are accessible
+  command: /sbin/iptables -I INPUT -i eth2 -p tcp -m multiport --dports 3306,4567,4444,4568 -j ACCEPT
+
+- name: save iptables rules
+  command: iptables-save
+
+- name: Bootstrap first Galera node
+  service: name=mysql state=started enabled=yes arguments="--wsrep-new-cluster"
+  when: ansible_hostname == 'galera001'
+
+- name: Update wsrep_sst password
+  mysql_user: name=wsrep_sst
+              host="%"
+              password={{ wsrep_sst_password }}
+              priv=*.*:"RELOAD","REPLICATION CLIENT"
+              state=present
+  when: ansible_hostname == 'galera001'
+
+- name: ensure anonymous users are not in the database
+  mysql_user: name='' host={{ item }} state=absent
+  with_items:
+    - localhost
+    - "{{ inventory_hostname }}"
+  when: ansible_hostname == 'galera001'
+
+- name: remove the test database
+  mysql_db: name=test state=absent
+  when: ansible_hostname == 'galera001'
+
+- name: remove root@hostname
+  mysql_user: name=root host={{ ansible_hostname }} state=absent
+  when: ansible_hostname == 'galera001'
+ 
+- name: Update mysql root password
+  mysql_user: name=root host={{ item }} password={{ mysql_root_password }}
+  with_items:
+    - 127.0.0.1
+    - ::1
+    - localhost
+  when: ansible_hostname == 'galera001'
+
+- template: src=roles/galera/templates/client.my.cnf.j2
+            dest=/root/.my.cnf
+
+# Second time to ensure wsrep_sst_auth is online
+- name: Bootstrap first Galera node
+  service: name=mysql state=restarted enabled=yes arguments="--wsrep-new-cluster"
+  when: ansible_hostname == 'galera001'
+
+- name: Start other nodes normally
+  service: name=mysql state=started enabled=yes
+  when: ansible_hostname != 'galera001'

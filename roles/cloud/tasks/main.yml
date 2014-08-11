@@ -1,0 +1,41 @@
+---
+- name: Ensure galera_network is present
+  local_action:
+    module: rax_network
+    credentials: ~/.raxpub
+    label: galera_network
+    cidr: 192.168.7.0/24
+    region: DFW
+    state: present
+
+- name: Ensure galera cloud servers are built
+  local_action:
+    module: rax
+    credentials: ~/.raxpub
+    name: galera%03d
+    flavor: 2
+    image: CentOS 6.5 (PVHVM)
+    state: present
+    count: 3
+    count_offset: 1
+    exact_count: yes
+    group: galera
+    wait: yes
+    region: DFW
+    key_name: andrewgarner
+    networks:
+      - public
+      - private
+      - galera_network
+    wait_timeout: 3600
+  register: rax
+
+- name: Add the instances we created (by public IP) to the group 'galera'
+  local_action:
+      module: add_host
+      hostname: "{{ item.name }}"
+      ansible_ssh_host: "{{ item.rax_accessipv4 }}"
+      ansible_ssh_pass: "{{ item.rax_adminpass }}"
+      groupname: galera
+  with_items: rax.success
+  when: rax.action == 'create'

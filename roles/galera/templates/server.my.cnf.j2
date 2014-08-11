@@ -1,0 +1,88 @@
+[mysqld]
+
+## General
+datadir                         = /var/lib/mysql
+#tmpdir                         = /tmp
+socket                          = /var/lib/mysql/mysql.sock
+skip-name-resolve
+sql-mode                        = NO_ENGINE_SUBSTITUTION
+#event-scheduler                = 1
+
+## Cache
+thread-cache-size               = 16
+table-open-cache                = 4096
+table-definition-cache          = 2048
+query-cache-size                = 0
+query-cache-type                = off
+
+## Per-thread Buffers
+#sort-buffer-size               = 2M
+
+## Temp Tables
+#tmp-table-size                 = 16M
+#max-heap-table-size            = 16M
+
+## Networking
+back-log                        = 100
+max-connections                 = 400
+max-connect-errors              = 10000
+max-allowed-packet              = 16M
+#interactive-timeout            = 3600
+#wait-timeout                   = 600
+
+{% set cluster_members = [] %}
+{% for node in groups.galera %}
+  {% set _ = cluster_members.append(hostvars[node].ansible_eth2.ipv4.address) %}
+{% endfor -%}
+## Galera
+wsrep-provider                  = /usr/lib64/galera/libgalera_smm.so
+wsrep-provider-options          = "gcache.size=1G;gcache.page_size=1G;"
+wsrep-cluster-address           = gcomm://{{ cluster_members|join(',') }}
+wsrep-node-address              = {{ ansible_eth2.ipv4.address }}
+wsrep-sst-method                = xtrabackup-v2
+wsrep-sst-auth                  = wsrep_sst:{{ wsrep_sst_password|default("") }}
+
+wsrep-slave-threads             = 16
+
+### Storage Engines
+
+## MyISAM
+key-buffer-size                 = 64M
+myisam-sort-buffer-size         = 128M
+
+## InnoDB
+innodb-buffer-pool-size         = 1G
+innodb-log-file-size            = 256M
+#innodb-log-buffer-size         = 8M
+#innodb-file-per-table          = 1
+#innodb-open-files              = 300
+innodb-flush-log-at-trx-commit  = 2
+innodb-autoinc-lock-mode        = 2
+
+## Replication
+{% for host in groups['galera'] %}
+{% if host == ansible_hostname %}
+server-id                       = {{loop.index}}
+{% endif %}
+{% endfor %}
+#log-bin                        = /var/lib/mysqllogs/bin-log
+#relay-log                      = /var/lib/mysqllogs/relay-log
+relay-log-space-limit           = 16G
+expire-logs-days                = 7
+#read-only                      = 1
+#sync-binlog                    = 1
+binlog-format                   = ROW
+
+## Logging
+log-output                      = FILE
+slow-query-log                  = 1
+slow-query-log-file             = slow-queries.log
+log-slow-slave-statements
+long-query-time                 = 2
+
+[mysqld_safe]
+log-error                       = /var/log/mysqld.log
+open-files-limit                = 65535
+
+[mysql]
+no-auto-rehash

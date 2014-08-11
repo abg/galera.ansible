@@ -1,0 +1,5 @@
+---
+
+
+- name: display message
+  debug: msg="Hi {{ message }}"
